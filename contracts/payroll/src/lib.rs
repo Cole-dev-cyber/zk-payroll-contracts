@@ -789,6 +789,41 @@ impl Payroll {
         }
     }
 
+    /// Normalize an asset symbol for consistent allowlist and reservation checks.
+    ///
+    /// Asset symbols are trimmed and uppercased so that small formatting
+    /// differences such as "usdc", "USDC", or " USDC " all resolve to the
+    /// same canonical symbol before a payroll asset allowlist or reservation
+    /// check is performed.
+    ///
+    /// # Panics
+    /// - If the symbol is empty after trimming.
+    /// - If the symbol is longer than 32 bytes after trimming.
+    /// - If the symbol contains non-ASCII bytes.
+    fn normalize_asset_symbol(e: &Env, symbol: &str) -> Symbol {
+        let trimmed = symbol.trim();
+        if trimmed.is_empty() {
+            panic!("Asset symbol cannot be empty");
+        }
+
+        let bytes = trimmed.as_bytes();
+        if bytes.len() > 32 {
+            panic!("Asset symbol too long");
+        }
+
+        let mut normalized = [0u8; 32];
+        for (i, &b) in bytes.iter().enumerate() {
+            if !b.is_ascii() {
+                panic!("Asset symbol must be ASCII");
+            }
+            normalized[i] = if b.is_ascii_lowercase() { b - 32 } else { b };
+        }
+
+        let normalized_str = core::str::from_utf8(&normalized[..bytes.len()])
+            .expect("normalized asset symbol is valid UTF-8");
+        Symbol::new(e, normalized_str)
+    }
+
     /// Reject a payroll batch that lists the same employee wallet more than
     /// once (#379).
     ///
@@ -7591,26 +7626,49 @@ mod tests {
     }
 
     #[test]
-    fn test_asset_symbol_normalization_lowercase_is_uppercased() {
+    fn test_asset_symbol_normalization_mixed_case_and_whitespace() {
         let env = Env::default();
-        let raw = Symbol::new(&env, "usdc");
-        let normalized = super::normalize_asset_symbol(&env, raw);
-        assert_eq!(normalized, Symbol::new(&env, "USDC"));
+
+        assert_eq!(
+            Payroll::normalize_asset_symbol(&env, "usdc"),
+            Symbol::new(&env, "USDC")
+        );
+        assert_eq!(
+            Payroll::normalize_asset_symbol(&env, "  USDC  "),
+            Symbol::new(&env, "USDC")
+        );
+        assert_eq!(
+            Payroll::normalize_asset_symbol(&env, "usd_coin"),
+            Symbol::new(&env, "USD_COIN")
+        );
     }
 
     #[test]
-    fn test_asset_symbol_normalization_is_consistent_for_mixed_case() {
+    #[should_panic(expected = "Asset symbol cannot be empty")]
+    fn test_asset_symbol_normalization_rejects_empty_symbol() {
         let env = Env::default();
-        let mixed = super::normalize_asset_symbol(&env, Symbol::new(&env, "UsdC"));
-        let lower = super::normalize_asset_symbol(&env, Symbol::new(&env, "usdc"));
-        assert_eq!(mixed, lower);
+
+        Payroll::normalize_asset_symbol(&env, "   ");
     }
 
     #[test]
-    fn test_asset_symbol_normalization_preserves_distinct_assets() {
+    #[should_panic(expected = "Asset symbol too long")]
+    fn test_asset_symbol_normalization_rejects_symbol_over_32_bytes() {
         let env = Env::default();
-        let usdc = super::normalize_asset_symbol(&env, Symbol::new(&env, "usdc"));
-        let eurc = super::normalize_asset_symbol(&env, Symbol::new(&env, "eurc"));
-        assert_ne!(usdc, eurc);
+
+        Payroll::normalize_asset_symbol(&env, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890");
+    }
+
+    #[test]
+    fn test_asset_symbol_normalization_before_allowlist_and_reservation_checks() {
+        let env = Env::default();
+        let allowlist_symbol = Symbol::new(&env, "USDC");
+        let submitted_symbol = Payroll::normalize_asset_symbol(&env, "usdc");
+
+        assert_eq!(submitted_symbol, allowlist_symbol);
+        assert_eq!(
+            Payroll::normalize_asset_symbol(&env, "  USDC  "),
+            allowlist_symbol
+        );
     }
 }
