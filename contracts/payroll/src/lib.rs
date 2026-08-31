@@ -7589,4 +7589,28 @@ mod tests {
         assert_eq!(status.total_amount, 25_000);
         assert!(status.is_cancelled);
     }
+
+    #[test]
+    fn test_asset_symbol_normalization_lowercase_is_uppercased() {
+        let env = Env::default();
+        let raw = Symbol::new(&env, "usdc");
+        let normalized = super::normalize_asset_symbol(&env, raw);
+        assert_eq!(normalized, Symbol::new(&env, "USDC"));
+    }
+
+    #[test]
+    fn test_asset_symbol_normalization_is_consistent_for_mixed_case() {
+        let env = Env::default();
+        let mixed = super::normalize_asset_symbol(&env, Symbol::new(&env, "UsdC"));
+        let lower = super::normalize_asset_symbol(&env, Symbol::new(&env, "usdc"));
+        assert_eq!(mixed, lower);
+    }
+
+    #[test]
+    fn test_asset_symbol_normalization_preserves_distinct_assets() {
+        let env = Env::default();
+        let usdc = super::normalize_asset_symbol(&env, Symbol::new(&env, "usdc"));
+        let eurc = super::normalize_asset_symbol(&env, Symbol::new(&env, "eurc"));
+        assert_ne!(usdc, eurc);
+    }
 }
